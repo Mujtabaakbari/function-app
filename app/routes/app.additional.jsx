@@ -1,150 +1,216 @@
-// import { authenticate } from '../shopify.server';
-import {Form, useFetcher} from 'react-router';
+
+import {useFetcher} from 'react-router';
 import { useState} from 'react';
+import { authenticate } from '../shopify.server';
 
- 
-const METAFIELD_NAMESPACE = "volume_discount";
-const METAFIELD_KEY = "rules";
+export const loader = async ({request}) => {
+   await authenticate.admin(request);
+}
 
-export default function AdditionalPage() {
-  const [discounts, setDiscounts] = useState([]);
-  const [newQuantity, setNewQuantity] = useState("");
-  const [newPercentage, setNewPercentage] = useState("");
-  const [newMessage, setNewMessage] = useState("");
-  const [newProduct, setNewProduct] = useState(null);
+export const action = async ({ request }) => {
+  const { admin } = await authenticate.admin(request);
+  const formData = await request.formData();
 
-  const getProduct = async () => {
-    const selected = await shopify.resourcePicker({type: 'product', multiple: false});
-    setNewProduct(selected);
-  }
-  console.log('Selected Product:', newProduct);
+  const quantity = formData.get("quantity")?.trim();
+  const percentage = Number(formData.get("percentage"));
+  const message = formData.get("message")?.trim();
 
-  const handleSave = () => {
-    if (!newQuantity || !newPercentage) return;
+  const productRaw = formData.get("product");
+  const products = productRaw ? JSON.parse(productRaw) : [];
+  const productIds = products.map(p => p.id);
 
-    const newDiscount = {
-      quantity: Number(newQuantity),
-      percentage: Number(newPercentage),
-      message: newMessage,
-      product: newProduct,
-    };
+console.log("all data from the comes: =>",quantity, percentage, message, productIds);
 
-    setDiscounts((prev) => [...prev, newDiscount]);
-    console.log('object of product => ', newDiscount);
-    // Reset fields
-    setNewQuantity("");
-    setNewPercentage("");
-    setNewMessage("");
-
-    const fetcher = useFetcher();
-
-  fetcher.submit({ formData: JSON.stringify([...discounts, newDiscount]) }, { method: 'post', action: '/app/additional' })
+  const metafieldConfig = {
+    quantity,
+    percentage,
+    message,
+    productIds,
   };
 
+  console.log("all data belongs to the metafields are here.",metafieldConfig)
+
+  const response = await admin.graphql(
+    `#graphql
+    mutation discountAutomaticAppCreate(
+      $automaticAppDiscount: DiscountAutomaticAppInput!
+    ) {
+      discountAutomaticAppCreate(
+        automaticAppDiscount: $automaticAppDiscount
+      ) {
+        userErrors {
+          field
+          message
+        }
+        automaticAppDiscount {
+          discountId
+          title
+          status
+        }
+      }
+    }`,
+    {
+      variables: {
+        automaticAppDiscount: {
+          title:`discount id ${Date.now()}`,
+          functionHandle: "discount-function",
+          startsAt: new Date().toISOString(),
+
+          // 🔑 THIS decides discountClasses
+          combinesWith: {
+            productDiscounts: true,
+            orderDiscounts: false,
+            shippingDiscounts: false,
+          },
+
+          metafields: [
+            {
+              namespace: "custom",
+              key: "function-configuration",
+              type: "json",
+              value: JSON.stringify(metafieldConfig),
+            },
+          ],
+        },
+      },
+    }
+  );
+
+  const result = await response.json();
+
+
+  const errors =
+    result?.data?.discountAutomaticAppCreate?.userErrors ?? [];
+
+  if (errors.length) {
+    throw new Error(errors[0].message);
+  }
+
+  return { ok: true };
+};
+
+export default function AdditionalPage() {
+  const fetcher = useFetcher();
+
+  const [quantity, setQuantity] = useState("");
+  const [percentage, setPercentage] = useState("");
+  const [message, setMessage] = useState("");
+  const [products, setProducts] = useState([]);
+  
+
+
+  const getProduct = async () => {
+    const selected = await shopify.resourcePicker({
+      type: "product",
+      multiple: false,
+    });
+    setProducts(selected);
+  };
+
+  const handleSave = () => {
+    fetcher.submit(
+      {
+        quantity,
+        percentage,
+        message,
+        product: JSON.stringify(products),
+      },
+      {
+        method: "post",
+        action: "/app/additional",
+      }
+    );
+  };
 
   return (
     <s-page heading="Additional page">
+      
       <s-section>
-        <Form method="post" data-save-bar>
-          <s-query-container>
-            <s-stack
-              direction="inline"
-              gap="base"
-              justifyContent="space-between"
+        <s-query-container>
+          <s-stack direction="inline" justifyContent="space-between">
+            <s-heading>Discount</s-heading>
+            <s-button commandFor="modal">Create New Discount</s-button>
+          </s-stack>
+
+          <s-modal id="modal" heading="Details">
+            <s-text-field
+              label="Quantity"
+              type="number"
+              value={quantity}
+              onChange={(e) => setQuantity(e.target.value)}
+            />
+
+            <s-text-field
+              label="Discount (%)"
+              type="number"
+              value={percentage}
+              onChange={(e) => setPercentage(e.target.value)}
+            />
+
+            <s-text-field
+              label="Message"
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+            />
+
+            <s-button onClick={getProduct}>Choose product</s-button>
+
+            <s-button
+              slot="primary-action"
+              variant="primary"
+              onClick={handleSave}
+              commandFor="modal"
+              command="--hide"
+              loading={fetcher.state !== "idle"}
             >
-              <s-heading>Discount</s-heading>
-              <s-box>
-                <s-button commandFor="modal">
-                  Create New Discount
-                </s-button>
-              </s-box>
-            </s-stack>
-
-            <s-box>
-              <s-modal id="modal" heading="Details">
-                <s-text-field
-                  label="Quantity"
-                  type="number"
-                  value={newQuantity}
-                  onChange={(e) => setNewQuantity(e.target.value)}
-                />
-
-                <s-text-field
-                  label="Discount (%)"
-                  type="number"
-                  required
-                  value={newPercentage}
-                  onChange={(e) => setNewPercentage(e.target.value)}
-                />
-
-                <s-text-field
-                  label="Message"
-                  value={newMessage}
-                  onChange={(e) => setNewMessage(e.target.value)}
-                />
-
-                <s-button onClick={getProduct}>choose product</s-button>
-                
-                <s-button
-                  tone="critical"
-                  slot="secondary-actions"
-                  commandFor="modal"
-                  command="--hide"
-                >
-                  Close
-                </s-button>
-
-                <s-button
-                  slot="primary-action"
-                  variant="primary"
-                  onClick={handleSave}
-                  commandFor="modal"
-                  command="--hide"
-                >
-                  Save
-                </s-button>
-              </s-modal>
-            </s-box>
-          </s-query-container>
-        </Form>
+              Save
+            </s-button>
+          </s-modal>
+        </s-query-container>
       </s-section>
-
-      <s-section slot="aside" heading="Resources">
-        <s-unordered-list>
-          <s-list-item>
-            <s-link
-              href="https://shopify.dev/docs/apps/design-guidelines/navigation#app-nav"
-              target="_blank"
-            >
-              App nav best practices
-            </s-link>
-          </s-list-item>
-        </s-unordered-list>
-      </s-section>
+   
     </s-page>
   );
 }
 
+ 
+async function saveMetafield(formData, admin) {
+  const quantity = formData.get("quantity")?.trim();
+  const percentage = Number(formData.get("percentage"));
+  const message = formData.get("message")?.trim();
 
-async function createOrUpdateMetafield(admin,formData) {
+  const productRaw = formData.get("product");
+  const products = productRaw ? JSON.parse(productRaw) : [];
+  const productIds = products.map(p => p.id);
 
-  const GET_OWNER_ID = `
-   query getOwnerID {
-      currentAppInstallation {
+  const metafieldValue = {
+    quantity,
+    percentage,
+    message,
+    productIds,
+  };
+
+  // 🔑 Save on SHOP (best for global config)
+  const SHOP_ID_QUERY = `
+    #graphql
+    query {
+      shop {
         id
       }
     }
   `;
 
-  const ownerResponse = await admin.graphql(GET_OWNER_ID);
-  const ownerjson = await ownerResponse.json();
-  const ownerId = ownerjson.data.currentAppInstallation.id;
-  console.log('Owner ID:', ownerId);
+  const shopRes = await admin.graphql(SHOP_ID_QUERY);
+  const shopJson = await shopRes.json();
+  const shopId = shopJson.data.shop.id;
 
-  const METAFIELD_MUTATION = `
-     mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
+  const METAFIELD_SET = `
+    #graphql
+    mutation metafieldsSet($metafields: [MetafieldsSetInput!]!) {
       metafieldsSet(metafields: $metafields) {
         metafields {
+          id
+          namespace
           key
           value
         }
@@ -156,58 +222,27 @@ async function createOrUpdateMetafield(admin,formData) {
     }
   `;
 
-  const input = {
-    metafields:[
-      {
-        namespace: METAFIELD_NAMESPACE,
-        key: METAFIELD_KEY,
-        type: "json",
-        ownerId: ownerId,
-      }
- 
-    ]
+  const response = await admin.graphql(METAFIELD_SET, {
+    variables: {
+      metafields: [
+        {
+          ownerId: shopId,
+          namespace: "custom",
+          key: "discount_config",
+          type: "json",
+          value: JSON.stringify(metafieldValue),
+        },
+      ],
+    },
+  });
+
+  const result = await response.json();
+
+  const errors = result?.data?.metafieldsSet?.userErrors ?? [];
+  if (errors.length) {
+    throw new Error(errors[0].message);
   }
 
-  const response = await admin.graphql(METAFIELD_MUTATION, {metafields: input.metafields});
-
-  const discount_input = {
-    metafields:[
-      {
-        namespace: METAFIELD_NAMESPACE,
-        key: METAFIELD_KEY,
-        type: "json",
-        value: JSON.stringify(formData || []),
-        ownerId: "gid://shopify/DiscountAutomaticNode/1278889197638",
-      }
-    ]
-  }
-
-  const discountRespone = await admin.graphql(METAFIELD_MUTATION, {metafields: discount_input.metafields});
-
-  const responeJson = await response.json();
-  if(responeJson.data.metafieldsSet.userErrors.length){
-    throw new Error(responeJson.data.metafieldsSet.userErrors[0].message);
-  }
-
-    return responeJson.data.metafieldsSet.metafields;
+  return result.data.metafieldsSet.metafields[0];
 }
 
-
-async function getDiscountRules(admin) {
-  const GET_OWNER_ID = `
-     query getOwnerID {
-      currentAppInstallation {
-        id
-        metafield(namespace: "${METAFIELD_NAMESPACE}", key: "${METAFIELD_KEY}") {
-          key
-          value
-        }
-      }
-    }
-  ` 
-
-  const ownerResponse = await admin.graphql(GET_OWNER_ID);
-  const ownerjson = await ownerResponse.json();
-
-  return ownerjson.data.currentAppInstallation.metafield; 
-}

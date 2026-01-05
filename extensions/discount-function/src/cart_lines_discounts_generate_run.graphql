@@ -1,4 +1,24 @@
-query CartInput {
+# query CartInput {
+#   cart {
+#     lines {
+#       id
+#       quantity
+#       cost {
+#         subtotalAmount {
+#           amount
+#         }
+#         totalAmount{
+#           amount
+#         }
+#       }
+#     }
+#   }
+#   discount {
+#     discountClasses
+#   }
+# }
+
+query Input {
   cart {
     lines {
       id
@@ -7,13 +27,25 @@ query CartInput {
         subtotalAmount {
           amount
         }
-        totalAmount{
-          amount
+      }
+      merchandise {
+        __typename
+        ... on ProductVariant {
+          id
+          product {
+            id
+          }
         }
       }
     }
   }
   discount {
     discountClasses
+    metafield(
+      namespace: "custom"
+      key: "function-configuration"
+    ) {
+      jsonValue
+    }
   }
 }
