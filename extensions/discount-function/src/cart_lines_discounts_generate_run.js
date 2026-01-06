@@ -105,10 +105,10 @@ export function cartLinesDiscountsGenerateRun(input) {
             selectionStrategy: "ALL",
             candidates: [
               {
-                message, // ✅ string only
+                message, 
                 value: {
                   percentage: {
-                    value: percentage, // ✅ number only
+                    value: percentage,
                   },
                 },
                 targets: [
