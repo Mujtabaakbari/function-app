@@ -117,47 +117,135 @@ export const action = async ({ request }) => {
     return { ok: true };
   }
 
+
   /* ===========================
      UPDATE
   ============================ */
+
   if (intent === "update") {
-    // 1️⃣ Update FUNCTION metafield
-    await admin.graphql(
-      `#graphql
-      mutation UpdateDiscount($id: ID!, $value: String!) {
-        discountAutomaticAppUpdate(
-          id: $id
-          automaticAppDiscount: {
-            metafields: [
-              {
-                namespace: "custom"
-                key: "function-configuration"
-                type: "json"
-                value: $value
-              }
-            ]
-          }
-        ) {
-          userErrors { message }
+  // 1️⃣ Update the discount itself
+  const response = await admin.graphql(
+    `#graphql
+    mutation UpdateDiscountAutomaticApp(
+      $id: ID!
+      $automaticAppDiscount: DiscountAutomaticAppInput!
+    ) {
+      discountAutomaticAppUpdate(id: $id, automaticAppDiscount: $automaticAppDiscount) {
+        automaticAppDiscount {
+          discountId
+        }
+        userErrors {
+          field
+          message
         }
       }
+    }
     `,
-      {
-        variables: {
-          id: discountId,
-          value: JSON.stringify(metafieldConfig),
+    {
+      variables: {
+        id: discountId,
+        automaticAppDiscount: {
+          title: metafieldConfig.title || `Discount ${Date.now()}`,
+          functionHandle: "discount-function",
+          // add startsAt / endsAt / combinesWith only if you are changing them
         },
-      }
-    );
+      },
+    }
+  );
 
-    // 2️⃣ Update SHOP metafield
-    await updateShopMetafield(admin, localId, {
-      discountId,
-      ...metafieldConfig,
-    });
+  const json = await response.json();
 
-    return { ok: true };
+  var updateErrors = [];
+  if (
+    json &&
+    json.data &&
+    json.data.discountAutomaticAppUpdate &&
+    json.data.discountAutomaticAppUpdate.userErrors
+  ) {
+    updateErrors = json.data.discountAutomaticAppUpdate.userErrors;
   }
+
+  if (updateErrors.length > 0) {
+    throw new Error(updateErrors.map(function (e) {
+      return e.message;
+    }).join(", "));
+  }
+
+  // 2️⃣ Upsert the function configuration metafield on the discount
+  const metaResponse = await admin.graphql(
+    `#graphql
+    mutation SetDiscountFunctionConfigurationMetafield($ownerId: ID!, $value: String!) {
+      metafieldsSet(metafields: [
+        {
+          ownerId: $ownerId
+          namespace: "custom"
+          key: "function-configuration"
+          type: "json"
+          value: $value
+        }
+      ]) {
+        metafields {
+          id
+        }
+        userErrors {
+          field
+          message
+        }
+      }
+    }
+    `,
+    {
+      variables: {
+        ownerId: discountId, // DiscountAutomaticNode ID
+        value: JSON.stringify(metafieldConfig),
+      },
+    }
+  );
+
+  const metaJson = await metaResponse.json();
+
+  var metaErrors = [];
+  if (
+    metaJson &&
+    metaJson.data &&
+    metaJson.data.metafieldsSet &&
+    metaJson.data.metafieldsSet.userErrors
+  ) {
+    metaErrors = metaJson.data.metafieldsSet.userErrors;
+  }
+
+  if (metaErrors.length > 0) {
+    throw new Error(metaErrors.map(function (e) {
+      return e.message;
+    }).join(", "));
+  }
+
+  // await updateShopMetafield(admin, localId, {
+  //   discountId: discountId,
+  //   ...metafieldConfig,
+  // });
+
+  const shopId = await getShopId(admin);
+const discounts = await getShopDiscounts(admin);
+
+const updatedDiscounts = discounts.map((d) => {
+  if (d.id === localId) {
+    return {
+      ...d,
+      discountId: discountId, // keep Shopify discount ID
+      ...metafieldConfig,     // updated fields
+    };
+  }
+  return d;
+});
+
+await setShopDiscounts(admin, shopId, updatedDiscounts);
+
+
+  return { ok: true };
+}
+
+
 
   /* ===========================
      DELETE
@@ -230,6 +318,7 @@ export default function AdditionalPage() {
       {/* CREATE */}
       <s-section>
         <s-query-container>
+          
           <s-stack direction="inline" justifyContent="space-between">
             <s-heading>Discount</s-heading>
             <s-button commandFor="modal">Create New Discount</s-button>
@@ -438,8 +527,6 @@ export default function AdditionalPage() {
 }
 
 
-
-
 async function getShopDiscounts(admin) {
   const res = await admin.graphql(`
     { shop { metafield(namespace: "custom", key: "discount_config") { value } } }
@@ -459,18 +546,6 @@ async function saveMetafield({ admin, discount }) {
   await setShopDiscounts(admin, shopId, existing);
 }
 
-
-async function updateShopMetafield(admin, localId, updated) {
-  const shopId = await getShopId(admin);
-  const discounts = await getShopDiscounts(admin);
-
-  const updatedList = discounts.map(d =>
-    d.id === localId ? { ...d, ...updated } : d
-  );
-
-  await setShopDiscounts(admin, shopId, updatedList);
-
-}
 
 
 async function deleteShopMetafield(admin, localId) {
@@ -512,4 +587,54 @@ async function setShopDiscounts(admin, shopId, discounts) {
     }
   );
 
+}
+
+
+async function updateShopMetafield(admin, localId, data) {
+  const value = JSON.stringify(data);
+
+  const response = await admin.graphql(
+    `#graphql
+    mutation SetShopMetafield($value: String!) {
+      metafieldsSet(metafields: [
+        {
+          ownerId: "gid://shopify/Shop/76785385700"
+          namespace: "your_app"
+          key: "discounts"
+          type: "json"
+          value: $value
+        }
+      ]) {
+        metafields {
+          id
+        }
+        userErrors {
+          field
+          message
+        }
+      }
+    }
+    `,
+    { variables: { value: value } }
+  );
+
+  const json = await response.json();
+
+  var errors = [];
+  if (
+    json &&
+    json.data &&
+    json.data.metafieldsSet &&
+    json.data.metafieldsSet.userErrors
+  ) {
+    errors = json.data.metafieldsSet.userErrors;
+  }
+
+  if (errors.length > 0) {
+    throw new Error(
+      errors.map(function (e) {
+        return e.message;
+      }).join(", ")
+    );
+  }
 }
